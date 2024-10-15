@@ -14,6 +14,7 @@ import re
 import concurrent.futures
 import logging
 from functools import lru_cache
+from typing import Dict, Any
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -221,48 +222,80 @@ def get_url_content(url: str, timeout: int = 10, max_retries: int = 3, retry_del
                 result["content"] = f"Unable to fetch content after {max_retries} attempts. Error: {str(e)}"
                 return result
 
+def summarize_url_data(url_data: Dict[str, Any]) -> str:
+    summary = []
+    
+    # Domain and URL Structure
+    domain_info = url_data.get('domain_analysis', {})
+    url_structure = url_data.get('url_structure', {})
+    summary.append(f"Domain: {domain_info.get('domain', 'N/A')}, TLD: {domain_info.get('tld', 'N/A')}")
+    summary.append(f"URL Length: {url_structure.get('length', 'N/A')}, Subdomains: {url_structure.get('num_subdomains', 'N/A')}")
+    summary.append(f"Abnormal Chars: {url_structure.get('abnormal_chars', 'N/A')}, IP in URL: {url_structure.get('ip_in_url', 'N/A')}")
+
+    # WHOIS Info
+    whois_info = url_data.get('whois_info', {})
+    summary.append(f"Registrar: {whois_info.get('registrar', 'N/A')}, Creation Date: {whois_info.get('creation_date', 'N/A')}")
+
+    # SSL Info
+    ssl_info = url_data.get('ssl_info', {})
+    summary.append(f"SSL Issuer: {ssl_info.get('issuer', {}).get('O', 'N/A')}, Valid Until: {ssl_info.get('notAfter', 'N/A')}")
+
+    # Content Analysis
+    content_analysis = url_data.get('content_analysis', {})
+    summary.append(f"Title: {content_analysis.get('title', 'N/A')}")
+    summary.append(f"Links: {len(content_analysis.get('links', []))}, Forms: {len(content_analysis.get('forms', []))}")
+    summary.append(f"Login Form: {'Present' if content_analysis.get('has_login_form') else 'Absent'}")
+
+    # JavaScript Analysis
+    js_analysis = url_data.get('javascript_analysis', {})
+    summary.append(f"Scripts: {js_analysis.get('script_count', 'N/A')}, Suspicious: {len(js_analysis.get('suspicious_scripts', []))}")
+
+    return "\n".join(summary)
+
 def generate_prompt(url: str, url_data: Dict[str, Any]) -> str:
-    return f"""Analyze the following URL and its content in detail, then provide a response in this exact format:
+    summary = summarize_url_data(url_data)
+    
+    prompt = f"""URL Threat Analysis Task
 
-Classification: [Benign/Suspicious/Malicious]
-Suspicion Level: [A number from 0-100]
-URL Analysis:
-1. [Key point about the URL structure]
-2. [Key point about the domain]
-3. [Any additional relevant point about the URL]
-Content Analysis:
-1. [First key point about the content]
-2. [Second key point about the content]
-3. [Third key point about the content]
-4. [Fourth key point about the content]
-5. [Fifth key point about the content]
-Overall Assessment:
-1. [First key point combining URL and content analysis]
-2. [Second key point combining URL and content analysis]
-3. [Third key point combining URL and content analysis]
+Target URL: {url}
 
-Conclusion:
-Safety: [Overall safety assessment]
-Key Findings: [Brief summary of main analysis points]
-Recommendation: [Advice for users regarding this URL]
+Summary Information:
+{summary}
 
-URL: {url}
+Perform the following tasks to assess the potential threat of this URL. Each task is crucial in determining the safety and trustworthiness of the URL.
 
-Additional Information:
-Domain Analysis: {url_data['domain_analysis']}
-URL Structure: {url_data['url_structure']}
-WHOIS Info: {url_data['whois_info']}
-DNS Records: {url_data['dns_records']}
-SSL Info: {url_data['ssl_info']}
-Robots.txt: {url_data['robots_txt']}
-HTTP Headers: {url_data['http_headers']}
-Content Analysis: {url_data['content_analysis']}
-JavaScript Analysis: {url_data['javascript_analysis']}
+1. URL Classification
+Purpose: Quickly assess the overall risk level of the URL.
+Instruction: Classify into one of the following and briefly explain why.
+Response format: Classification: [Legitimate/Suspicious/Phishing] - Reason: [Brief explanation]
 
-Note: Pay special attention to all provided information, looking for any suspicious elements, inconsistencies, or indicators of malicious intent. If certain information is not available, base your analysis on the available data.
+2. URL Structure Analysis
+Purpose: Analyze the URL components in detail to identify suspicious patterns.
+Instruction: Analyze the following three aspects:
+a) Domain and brand relationship
+b) URL complexity and patterns
+c) TLD (Top-Level Domain) assessment
+Response format: Provide one sentence of analysis for each aspect.
 
-Provide your analysis below:
+3. Key Findings
+Purpose: Provide core information about the legitimacy or phishing potential of the URL.
+Instruction: List the three most important findings.
+Response format: Numbered list with one sentence explanation for each finding.
+
+4. Phishing Likelihood Assessment
+Purpose: Evaluate the phishing risk based on comprehensive analysis.
+Instruction: Assess the likelihood of phishing as low, medium, or high and explain why.
+Response format: Phishing likelihood: [Low/Medium/High] - Reason: [Brief explanation]
+
+5. Security Recommendation
+Purpose: Provide necessary precautions for users when dealing with this URL.
+Instruction: Present specific recommendations for safe use or avoidance of the URL.
+Response format: Provide clear recommendations in one or two sentences.
+
+Provide concise and clear responses for each task. Base your analysis on the provided summary information and avoid unnecessary speculation.
 """
+    
+    return prompt
 
 if __name__ == "__main__":
     url = "https://www.naver.com"  # 테스트할 URL을 여기에 입력하세요

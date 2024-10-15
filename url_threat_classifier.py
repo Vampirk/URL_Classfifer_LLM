@@ -1,187 +1,233 @@
 import torch
 import transformers
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import BitsAndBytesConfig
 import re
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any, Tuple
 from url_analysis_utils import get_url_content, generate_prompt
+import os
+import logging
 
-MODEL_ID = "Meta-Llama-3.1-8B-Instruct"
-pipeline = None
+# 로깅 설정
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# 환경 변수 설정
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
+
+MODEL_ID = "Meta-Llama-3.1-8B-Instruct"  # 필요하다면 더 작은 모델로 변경
+model = None
+tokenizer = None
 
 def setup_device() -> torch.device:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        # GPU 메모리 제한 설정
+        torch.cuda.set_per_process_memory_fraction(0.8)  # GPU 메모리의 80%만 사용
+    else:
+        device = torch.device("cpu")
+    logger.info(f"Using device: {device}")
     return device
 
-def load_model() -> Optional[transformers.Pipeline]:
-    global pipeline
-    if pipeline is None:
+def load_model(device: torch.device) -> Optional[transformers.Pipeline]:
+    global model, tokenizer
+    if model is None:
         try:
+            # 토크나이저 로드
+            tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+            
+            if device.type == "cuda":
+                # GPU용 8-bit 양자화 설정
+                quantization_config = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                    llm_int8_threshold=6.0,
+                    llm_int8_has_fp16_weight=False,
+                )
+                
+                # 모델 로드 (8-bit 양자화 적용)
+                model = AutoModelForCausalLM.from_pretrained(
+                    MODEL_ID,
+                    quantization_config=quantization_config,
+                    device_map="auto",
+                    torch_dtype=torch.float16,
+                    low_cpu_mem_usage=True,
+                )
+            else:
+                # CPU용 설정
+                model = AutoModelForCausalLM.from_pretrained(
+                    MODEL_ID,
+                    device_map={"": device},
+                    low_cpu_mem_usage=True,
+                )
+            
+            # 파이프라인 생성
             pipeline = transformers.pipeline(
                 "text-generation",
-                model=MODEL_ID,
-                model_kwargs={"torch_dtype": torch.bfloat16},
-                device_map="auto",
+                model=model,
+                tokenizer=tokenizer,
+                device_map={"": device},
             )
+            
+            return pipeline
         except Exception as e:
-            print(f"모델 로딩 중 오류 발생: {e}")
+            logger.error(f"모델 로딩 중 오류 발생: {e}")
             return None
-    return pipeline
-
-def generate_analysis(pipeline, prompt: str, target_length: int = 1024, max_attempts: int = 5) -> str:
-    full_response = ""
-    for attempt in range(max_attempts):
-        result = pipeline(
-            prompt,
-            max_new_tokens=target_length,
-            do_sample=True,
-            temperature=0.4,
-            top_p=0.92,
-            num_return_sequences=1,
-            repetition_penalty=1.1,
-            eos_token_id=pipeline.tokenizer.eos_token_id,
-            pad_token_id=pipeline.tokenizer.eos_token_id,
+    else:
+        return transformers.pipeline(
+            "text-generation",
+            model=model,
+            tokenizer=tokenizer,
+            device_map={"": device},
         )
+
+def generate_analysis(pipeline, prompt: str, max_tokens: int = 500) -> Tuple[str, int, str]:
+    try:
+        with torch.no_grad():
+            result = pipeline(
+                prompt,
+                max_new_tokens=max_tokens,
+                do_sample=True,
+                temperature=0.7,
+                top_p=0.95,
+                num_return_sequences=1,
+                eos_token_id=pipeline.tokenizer.eos_token_id,
+                pad_token_id=pipeline.tokenizer.eos_token_id,
+            )
         generated_text = result[0]['generated_text']
-        response = generated_text.split("Provide your analysis below:")[1].strip()
-        full_response += response
-
-        if len(pipeline.tokenizer.encode(full_response)) >= target_length:
-            break
-        elif "Conclusion:" in response:
-            remaining_tokens = target_length - len(pipeline.tokenizer.encode(full_response))
-            if remaining_tokens > 50:
-                prompt = f"{prompt}\n{full_response}\nContinue the analysis to reach approximately {remaining_tokens} more tokens:"
-            else:
-                break
+        response = generated_text.split(prompt)[-1].strip()
+        total_tokens = len(pipeline.tokenizer.encode(response))
+        
+        # Log the full generated text for debugging
+        logger.debug(f"Full generated text:\n{generated_text}")
+        
+        return response, total_tokens, generated_text
+    except RuntimeError as e:
+        if "out of memory" in str(e):
+            logger.warning("CUDA out of memory. Switching to CPU...")
+            pipeline.device = torch.device("cpu")
+            pipeline.model.to("cpu")
+            return generate_analysis(pipeline, prompt, max_tokens)
         else:
-            prompt = f"{prompt}\n{full_response}\nContinue the analysis:"
+            raise e
 
-    return full_response
-
-def parse_response(response: str) -> Dict[str, Optional[str]]:
+def parse_response(response: str) -> Dict[str, Any]:
     parsed_result = {
-        "classification": None,
-        "suspicion_level": None,
+        "classification": "N/A",
         "url_analysis": [],
-        "content_analysis": [],
-        "overall_assessment": [],
-        "safety": None,
-        "key_findings": None,
-        "recommendation": None
+        "key_findings": [],
+        "phishing_likelihood": "N/A",
+        "security_recommendation": "N/A"
     }
     
-    classification_match = re.search(r"Classification:\s*(\w+)", response)
-    if classification_match:
-        parsed_result["classification"] = classification_match.group(1)
+    # 섹션 분리
+    sections = re.split(r'\*\*Task \d+:|={10,}', response)
     
-    suspicion_level_match = re.search(r"Suspicion Level:\s*(\d+)", response)
-    if suspicion_level_match:
-        parsed_result["suspicion_level"] = suspicion_level_match.group(1)
-    
-    url_analysis_matches = re.findall(r"URL Analysis:(.+?)Content Analysis:", response, re.DOTALL)
-    if url_analysis_matches:
-        parsed_result["url_analysis"] = re.findall(r"\d+\.\s*(.+)", url_analysis_matches[0])
-    
-    content_analysis_matches = re.findall(r"Content Analysis:(.+?)Overall Assessment:", response, re.DOTALL)
-    if content_analysis_matches:
-        parsed_result["content_analysis"] = re.findall(r"\d+\.\s*(.+)", content_analysis_matches[0])
-    
-    overall_assessment_matches = re.findall(r"Overall Assessment:(.+?)Conclusion:", response, re.DOTALL)
-    if overall_assessment_matches:
-        parsed_result["overall_assessment"] = re.findall(r"\d+\.\s*(.+)", overall_assessment_matches[0])
-    
-    safety_match = re.search(r"Safety:\s*(.+)", response)
-    if safety_match:
-        parsed_result["safety"] = safety_match.group(1)
-    
-    key_findings_match = re.search(r"Key Findings:\s*(.+)", response)
-    if key_findings_match:
-        parsed_result["key_findings"] = key_findings_match.group(1)
-    
-    recommendation_match = re.search(r"Recommendation:\s*(.+)", response)
-    if recommendation_match:
-        parsed_result["recommendation"] = recommendation_match.group(1)
+    for section in sections:
+        if "URL Classification" in section:
+            match = re.search(r'Classification:\s*(\w+)\s*-\s*Reason:\s*(.+)', section, re.DOTALL)
+            if match:
+                parsed_result["classification"] = f"{match.group(1)} - {match.group(2).strip()}"
+        elif "URL Structure Analysis" in section:
+            parsed_result["url_analysis"] = re.findall(r'^[a-c]\)(.+)$', section, re.MULTILINE)
+        elif "Key Findings" in section:
+            parsed_result["key_findings"] = re.findall(r'^\d+\.\s*(.+)$', section, re.MULTILINE)
+        elif "Phishing Likelihood Assessment" in section:
+            match = re.search(r'Phishing likelihood:\s*(\w+)\s*-\s*Reason:\s*(.+)', section, re.DOTALL)
+            if match:
+                parsed_result["phishing_likelihood"] = f"{match.group(1)} - {match.group(2).strip()}"
+        elif "Security Recommendation" in section:
+            parsed_result["security_recommendation"] = section.split("Response format:")[-1].strip()
     
     return parsed_result
 
-def analyze_url(url: str, pipeline, url_data: Dict[str, str], analysis_length: int = 1024) -> Dict[str, str]:
-    prompt = generate_prompt(url, url_data)
+def analyze_url(url: str, pipeline, url_data: Dict[str, Any], max_tokens: int = 500) -> Dict[str, Any]:
     try:
-        full_response = generate_analysis(pipeline, prompt, target_length=analysis_length)
-        parsed_result = parse_response(full_response)
+        prompt = generate_prompt(url, url_data)
+        logger.debug(f"Generated prompt:\n{prompt}")
+        
+        response, total_tokens, full_generated_text = generate_analysis(pipeline, prompt, max_tokens)
+        logger.debug(f"Model response:\n{response}")
+        
+        parsed_result = parse_response(response)
         parsed_result["url"] = url
-        parsed_result["analysis_length"] = len(pipeline.tokenizer.encode(full_response))
+        parsed_result["analysis_length"] = total_tokens
+        parsed_result["full_generated_text"] = full_generated_text  # Add this for debugging
         return parsed_result
     except Exception as e:
+        logger.error(f"Error in analyze_url: {str(e)}")
         return {"url": url, "error": str(e)}
 
-def classify_urls(urls: List[str], analysis_length: int = 1024) -> List[Dict[str, str]]:
-    pipeline = load_model()
-    if pipeline is None:
-        return [{"error": "모델 로딩 실패"} for _ in urls]
-    
-    results = []
-    for url in urls:
-        url_data = get_url_content(url)
-        result = analyze_url(url, pipeline, url_data, analysis_length=analysis_length)
-        results.append(result)
-    
-    return results
-
-def print_gpu_memory():
-    if torch.cuda.is_available():
-        print(f"GPU memory allocated: {torch.cuda.memory_allocated()/1e9:.2f} GB")
-        print(f"GPU memory reserved: {torch.cuda.memory_reserved()/1e9:.2f} GB")
-
-def format_result(result: Dict[str, str]) -> str:
+def format_result(result: Dict[str, Any]) -> str:
     formatted_output = f"""
-URL: {result['url']}
+URL: {result.get('url', 'N/A')}
 {'='*50}
-Classification: {result['classification']}
-Suspicion Level: {result['suspicion_level']}
+Classification: {result.get('classification', 'N/A')}
 {'='*50}
 URL Analysis:
 """
-    for point in result['url_analysis']:
-        formatted_output += f"- {point}\n"
-    
-    formatted_output += f"\nContent Analysis:\n"
-    for point in result['content_analysis']:
-        formatted_output += f"- {point}\n"
-    
-    formatted_output += f"\nOverall Assessment:\n"
-    for point in result['overall_assessment']:
+    for point in result.get('url_analysis', []):
         formatted_output += f"- {point}\n"
     
     formatted_output += f"""
 {'='*50}
-Conclusion:
-Safety: {result['safety']}
-Key Findings: {result['key_findings']}
-Recommendation: {result['recommendation']}
-{'='*50}
-Analysis Length: {result['analysis_length']} tokens
+Key Findings:
 """
+    for point in result.get('key_findings', []):
+        formatted_output += f"- {point}\n"
+    
+    formatted_output += f"""
+{'='*50}
+Phishing Likelihood: {result.get('phishing_likelihood', 'N/A')}
+{'='*50}
+Security Recommendation: {result.get('security_recommendation', 'N/A')}
+{'='*50}
+Analysis Length: {result.get('analysis_length', 'N/A')} tokens
+"""
+    
+    if 'error' in result:
+        formatted_output += f"Error: {result['error']}\n"
+    
+    # Add full generated text for debugging
+    formatted_output += f"""
+{'='*50}
+Full Generated Text (for debugging):
+{result.get('full_generated_text', 'N/A')}
+"""
+    
     return formatted_output
 
+def classify_url(url: str, max_tokens: int = 500) -> Dict[str, Any]:
+    device = setup_device()
+    pipeline = load_model(device)
+    if pipeline is None:
+        return {"url": url, "error": "Failed to load model"}
+    
+    try:
+        url_data = get_url_content(url)
+        result = analyze_url(url, pipeline, url_data, max_tokens)
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+        return result
+    except Exception as e:
+        logger.error(f"Error analyzing URL ({url}): {str(e)}")
+        return {"url": url, "error": str(e)}
+
+def print_gpu_memory():
+    if torch.cuda.is_available():
+        logger.info(f"GPU memory allocated: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+        logger.info(f"GPU memory reserved: {torch.cuda.memory_reserved()/1e9:.2f} GB")
+
 def main():
-    setup_device()
-    
-    urls = [
-        "https://trezor--model.webflow.io/"
-    ]
-    
-    analysis_length = 1024  # 토큰 수로 설정
-    results = classify_urls(urls, analysis_length=analysis_length)
-    
-    print("\nAnalysis Results:")
+    url = "https://www.google.com"  # Replace with the URL you want to analyze
+    result = classify_url(url)
+    print("\nAnalysis Result:")
     print("="*50)
-    for result in results:
-        print(format_result(result))
-        print("-"*50)
+    print(format_result(result))
     
-    print("\nGPU memory usage:")
-    print_gpu_memory()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device.type == "cuda":
+        print("\nGPU memory usage:")
+        print_gpu_memory()
 
 if __name__ == "__main__":
     main()
