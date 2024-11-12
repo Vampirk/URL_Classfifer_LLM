@@ -78,6 +78,25 @@ python api.py
 ```
 - API 서버는 기본적으로 `http://localhost:8000`에서 실행됩니다.
 
+## 실행 화면 예시
+
+### CLI 실행 화면
+![CLI 실행 예시](screenshots/cli-example-1.png)
+![CLI 실행 예시](screenshots/cli-example-2.png)
+![CLI 실행 예시](screenshots/cli-example-3.png)
+*CLI를 통한 URL 분석 결과 화면*
+
+### API 서버 응답 예시
+![API 응답 예시](screenshots/api-response.png)
+*API 서버의 분석 결과 응답*
+
+### Edge 확장 프로그램 화면
+![확장 프로그램 UI](screenshots/extension-ui.png)
+*Edge 확장 프로그램 팝업 화면*
+
+![분석 결과](screenshots/analysis-result.png)
+*URL 분석 결과 표시 화면*
+
 ### Edge 확장 프로그램 설치
 1. Edge 브라우저에서 `edge://extensions` 접속
 2. 개발자 모드 활성화
