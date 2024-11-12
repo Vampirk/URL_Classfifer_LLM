@@ -1,0 +1,18 @@
+URLSecurityAnalyzer/
+├── analyzers/
+│   ├── __init__.py
+│   ├── domain_analyzer.py
+│   ├── security_analyzer.py
+│   └── content_analyzer.py
+├── models/
+│   ├── __init__.py
+│   └── llm_analyzer.py
+├── utils/
+│   ├── __init__.py
+│   ├── config.py
+│   ├── prompt_generator.py
+│   └── api_schemas.py      # API 요청/응답 스키마만 추가
+├── Meta-Llama-3.1-8B-Instruct/ # 사용하는 8B 모델
+├── main.py                 # CLI 진입점
+├── api.py                  # FastAPI 앱 (새로 추가)
+└── requirements.txt
