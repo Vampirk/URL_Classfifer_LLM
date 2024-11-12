@@ -1,18 +1,119 @@
+# URL Security Analyzer
+
+## 프로젝트 구조 및 설명
+
+```
 URLSecurityAnalyzer/
-├── analyzers/
+├── analyzers/                     # 분석 모듈 디렉토리
+│   ├── __init__.py               
+│   ├── domain_analyzer.py         # 도메인 분석 (WHOIS, DNS 등)
+│   ├── security_analyzer.py       # 보안 분석 (SSL, 헤더 등)
+│   └── content_analyzer.py        # 콘텐츠 분석 (HTML, JavaScript 등)
+├── models/                        # ML 모델 디렉토리
 │   ├── __init__.py
-│   ├── domain_analyzer.py
-│   ├── security_analyzer.py
-│   └── content_analyzer.py
-├── models/
+│   └── llm_analyzer.py           # LLaMA 모델을 사용한 분석기
+├── utils/                         # 유틸리티 디렉토리
 │   ├── __init__.py
-│   └── llm_analyzer.py
-├── utils/
-│   ├── __init__.py
-│   ├── config.py
-│   ├── prompt_generator.py
-│   └── api_schemas.py      # API 요청/응답 스키마만 추가
-├── Meta-Llama-3.1-8B-Instruct/ # 사용하는 8B 모델
-├── main.py                 # CLI 진입점
-├── api.py                  # FastAPI 앱 (새로 추가)
-└── requirements.txt
+│   ├── config.py                 # 설정 관리
+│   ├── prompt_generator.py       # LLM 프롬프트 생성
+│   └── api_schemas.py           # API 스키마 정의
+├── Meta-Llama-3.1-8B-Instruct/   # LLaMA 8B 모델 파일
+├── url-analyzer-extension/        # Edge 확장 프로그램
+│   ├── analyzer.js               # 분석 결과 포맷팅
+│   ├── background.js             # 백그라운드 스크립트
+│   ├── manifest.json             # 확장 프로그램 매니페스트
+│   ├── popup.html                # 팝업 UI
+│   ├── popup.js                  # 팝업 로직
+│   └── icons/                    # 확장 프로그램 아이콘
+│       ├── extension-icon.svg    # SVG 아이콘
+│       ├── icon16.png           # 16x16 아이콘
+│       ├── icon48.png           # 48x48 아이콘
+│       └── icon128.png          # 128x128 아이콘
+├── main.py                       # CLI 진입점
+├── api.py                        # FastAPI 서버
+└── requirements.txt              # 의존성 목록
+```
+
+## 주요 구성 요소 설명
+
+### 1. 분석기 모듈 (`analyzers/`)
+- **domain_analyzer.py**: 도메인 관련 정보 분석
+  - WHOIS 정보 조회
+  - DNS 레코드 분석
+  - 도메인 평판 조회
+  
+- **security_analyzer.py**: 보안 관련 분석
+  - SSL/TLS 인증서 검증
+  - 보안 헤더 분석
+  - 보안 설정 확인
+  
+- **content_analyzer.py**: 웹 콘텐츠 분석
+  - HTML 구조 분석
+  - JavaScript 코드 분석
+  - 악성 패턴 탐지
+
+### 2. 모델 (`models/`)
+- **llm_analyzer.py**: LLaMA 모델 기반 분석
+  - 8B 파라미터 LLaMA 모델 사용
+  - URL 안전성 분석
+  - 위협 탐지 및 평가
+
+### 3. 유틸리티 (`utils/`)
+- **config.py**: 설정 관리
+  - 모델 설정
+  - API 설정
+  - 분석 파라미터
+  
+- **prompt_generator.py**: LLM 프롬프트 생성
+  - 분석 결과 기반 프롬프트 생성
+  - 컨텍스트 포맷팅
+  
+- **api_schemas.py**: API 스키마
+  - 요청/응답 모델 정의
+  - 데이터 검증 규칙
+
+### 4. 확장 프로그램 (`url-analyzer-extension/`)
+- **analyzer.js**: 결과 처리
+  - 분석 결과 파싱
+  - 포맷팅 및 표시
+  
+- **background.js**: 백그라운드 작업
+  - 컨텍스트 메뉴 관리
+  - 이벤트 처리
+  
+- **popup.html/js**: 사용자 인터페이스
+  - 분석 컨트롤
+  - 결과 표시
+  - API 통신
+
+### 5. 진입점
+- **main.py**: CLI 인터페이스
+  - 명령행 분석 도구
+  - 배치 프로세싱
+  
+- **api.py**: REST API 서버
+  - FastAPI 기반
+  - URL 분석 엔드포인트
+  - 상태 모니터링
+
+## 기능 요약
+
+1. **URL 안전성 분석**
+   - 피싱 URL 탐지
+   - 악성코드 유포 탐지
+   - 도메인 신뢰성 평가
+
+2. **보안 평가**
+   - SSL/TLS 검증
+   - 보안 설정 검사
+   - 취약점 스캔
+
+3. **콘텐츠 분석**
+   - HTML/JS 악성 코드 탐지
+   - 리다이렉션 분석
+   - 악성 패턴 식별
+
+4. **사용자 인터페이스**
+   - Edge 브라우저 확장
+   - 실시간 URL 검사
+   - 상세 분석 보고서
